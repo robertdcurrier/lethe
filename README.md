@@ -201,6 +201,7 @@ lethe/
     ├── pipeline.py          # Stage runner + metrics
     ├── ui.py                # colorama helpers (silenced in --agentic)
     ├── agent.py             # JSON envelope + exit codes
+    ├── mcp_server.py        # MCP server (Claude Desktop)
     └── data/
         ├── schema.sql
         └── seeds.sql
@@ -216,10 +217,51 @@ New denoising stages are added as callables in `pipeline.py`; the
 - ≤ 79 char lines, ≤ 35 line functions (excluding docstrings)
 - Stdlib + `numpy`, `scipy`, `soundfile`, `tqdm`, `colorama`
 
+## Claude Desktop (MCP server)
+
+Lethe ships an optional MCP (Model Context Protocol) server that
+exposes its capabilities as tools in Claude Desktop (and any other
+MCP-compatible client). Each tool shells out to the `lethe` CLI in
+`--agentic` mode — the CLI's JSON contract *is* the MCP contract, so
+there is no duplicated surface.
+
+Install with the MCP extra:
+
+```bash
+pip install -e ".[mcp]"
+```
+
+This registers a `lethe-mcp` console script. Then add it to your
+Claude Desktop config at
+`~/Library/Application Support/Claude/claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "lethe": {
+      "command": "/absolute/path/to/lethe-mcp"
+    }
+  }
+}
+```
+
+Find your path with `which lethe-mcp`. Restart Claude Desktop. Lethe
+will appear in the tool picker with four tools:
+
+| MCP tool | Purpose |
+|---|---|
+| `lethe_list_species` | Discover available species |
+| `lethe_list_profiles` | List signal profiles for a species |
+| `lethe_list_noise_sources` | List the noise-source catalog |
+| `lethe_denoise` | Run denoising on a WAV file |
+
+Each returns the same structured JSON envelope documented above.
+
 ## Status
 
 **v0.1.0** — CLI, config DB, batch processing, agentic JSON surface,
-single DSP stage (Butterworth bandpass). More stages coming.
+MCP server for Claude Desktop, single DSP stage (Butterworth
+bandpass). More stages coming.
 
 ## License
 

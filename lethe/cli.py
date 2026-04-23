@@ -132,9 +132,13 @@ def handle_list_profiles(args, conn):
         return agent.EXIT_DB
     items = db.list_profiles(conn, sp["id"])
     if args.agentic:
-        agent.emit(agent.list_doc(
-            "profiles", {"species": sp, "profiles": items},
-        ))
+        agent.emit({
+            "lethe_version": __version__,
+            "kind": "profiles",
+            "count": len(items),
+            "species": sp,
+            "profiles": items,
+        })
         return agent.EXIT_OK
     ui.title(f"profiles for {sp['common_name']}")
     for p in items:
