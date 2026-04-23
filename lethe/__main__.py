@@ -1,5 +1,4 @@
-#!/usr/bin/env python3
-"""lethe - surgical audio noise removal (CLI entry)."""
+"""Module entry point: enables `python -m lethe`."""
 import sys
 
 from lethe.cli import main

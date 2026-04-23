@@ -20,8 +20,13 @@ POSEIDON, OLÓRIN, and GANDALF.
 ```bash
 git clone https://github.com/robertdcurrier/lethe.git
 cd lethe
-pip install numpy scipy soundfile tqdm colorama
+pip install -e .
 ```
+
+Editable install via `pyproject.toml` pulls dependencies (`numpy`,
+`scipy`, `soundfile`, `tqdm`, `colorama`) and registers a `lethe`
+console command. Prefer not to install? Just run the package
+directly with `python -m lethe` (requires deps installed manually).
 
 On first run, Lethe initializes a small SQLite config database from
 `lethe/data/schema.sql` + `lethe/data/seeds.sql`.
@@ -31,25 +36,33 @@ On first run, Lethe initializes a small SQLite config database from
 Process a single WAV using a species-driven band:
 
 ```bash
-./lethe.py --species bottlenose_dolphin --profile whistle \
-           --input-file recording.wav \
-           --output-dir out/
+lethe --species bottlenose_dolphin --profile whistle \
+      --input-file recording.wav \
+      --output-dir out/
 ```
 
 Batch a directory:
 
 ```bash
-./lethe.py --species bottlenose_dolphin --profile whistle \
-           --input-dir recordings/ \
-           --output-dir out/
+lethe --species bottlenose_dolphin --profile whistle \
+      --input-dir recordings/ \
+      --output-dir out/
 ```
 
 Or skip the database and set the band manually:
 
 ```bash
-./lethe.py --freq-range 4000,20000 \
-           --input-file recording.wav \
-           --output-dir out/
+lethe --freq-range 4000,20000 \
+      --input-file recording.wav \
+      --output-dir out/
+```
+
+Same thing without installing:
+
+```bash
+python -m lethe --species bottlenose_dolphin --profile whistle \
+                --input-file recording.wav \
+                --output-dir out/
 ```
 
 Output filenames are `<input_stem>_<YYYYMMDD_HHMMSS>.wav`, so
@@ -175,8 +188,12 @@ of any common format (`*.wav`, `*.flac`, `*.mp3`, `*.aif`, `*.m4a`,
 
 ```
 lethe/
-├── lethe.py                 # Executable shim
+├── pyproject.toml           # Install metadata + `lethe` console entry
+├── README.md
+├── LICENSE
 └── lethe/                   # Package
+    ├── __init__.py
+    ├── __main__.py          # `python -m lethe` entry
     ├── cli.py               # argparse + dispatch + handlers
     ├── db.py                # SQLite access
     ├── dsp.py               # Filters (v0.1: Butterworth bandpass)

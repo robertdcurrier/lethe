@@ -1,0 +1,57 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lethe"
+version = "0.1.0"
+description = "Surgical audio noise reduction for passive acoustic recordings."
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "MIT"}
+authors = [
+    {name = "Robert D. Currier", email = "robertdcurrier@gmail.com"},
+]
+keywords = [
+    "bioacoustics",
+    "hydrophone",
+    "audio",
+    "denoising",
+    "passive-acoustic",
+    "marine-mammal",
+    "agentic",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Topic :: Multimedia :: Sound/Audio :: Analysis",
+    "Topic :: Scientific/Engineering",
+]
+dependencies = [
+    "numpy",
+    "scipy",
+    "soundfile",
+    "tqdm",
+    "colorama",
+]
+
+[project.urls]
+Homepage = "https://github.com/robertdcurrier/lethe"
+Repository = "https://github.com/robertdcurrier/lethe.git"
+Issues = "https://github.com/robertdcurrier/lethe/issues"
+
+[project.scripts]
+lethe = "lethe.cli:main"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+include = ["lethe*"]
+
+[tool.setuptools.package-data]
+lethe = ["data/*.sql"]

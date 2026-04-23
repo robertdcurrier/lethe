@@ -43,7 +43,7 @@ def parse_noise_sources(text):
 def build_parser():
     """Construct the argparse parser."""
     p = argparse.ArgumentParser(
-        prog="lethe.py",
+        prog="lethe",
         description="Surgical audio noise removal.",
     )
     src = p.add_mutually_exclusive_group()
