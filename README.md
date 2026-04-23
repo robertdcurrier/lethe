@@ -1,5 +1,9 @@
 # Lethe
 
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![Python: 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)](pyproject.toml)
+[![Status: alpha](https://img.shields.io/badge/status-alpha-orange)](#status)
+
 **AI noise reduction for passive acoustic recordings.**
 *Hear what matters. Every detail. Every time.*
 
@@ -7,7 +11,7 @@ Lethe is an [OCEANCODA](#) passive-acoustics tool for surgically
 reducing noise in hydrophone and field recordings while preserving
 biologically or scientifically meaningful signal. Built agent-native
 from day one: species-aware, configurable, and designed to be driven
-by a human *or* a supervising AI.
+by a human *or* a supervising AI via an MCP server.
 
 Named for the Greek river of oblivion — what passes through is
 forgotten. Part of OCEANCODA's mythological pantheon alongside
@@ -15,23 +19,37 @@ POSEIDON, OLÓRIN, and GANDALF.
 
 ---
 
+## Requirements
+
+- Python **3.10 or newer** (required by the MCP SDK)
+- macOS or Linux (Windows works for CLI; MCP path untested)
+
 ## Install
 
 ```bash
 git clone https://github.com/robertdcurrier/lethe.git
 cd lethe
-pip install -e .
+pip install -e .          # CLI only
+pip install -e ".[mcp]"   # CLI + MCP server for Claude Desktop
 ```
 
 Editable install via `pyproject.toml` pulls dependencies (`numpy`,
-`scipy`, `soundfile`, `tqdm`, `colorama`) and registers a `lethe`
-console command. Prefer not to install? Just run the package
-directly with `python -m lethe` (requires deps installed manually).
+`scipy`, `soundfile`, `tqdm`, `colorama`; plus `mcp` with the
+`[mcp]` extra) and registers two console commands:
+
+- `lethe` — the CLI
+- `lethe-mcp` — the MCP server (with the `[mcp]` extra)
+
+Prefer not to install? Just run the package directly:
+
+```bash
+python -m lethe ...       # uses the installed deps
+```
 
 On first run, Lethe initializes a small SQLite config database from
 `lethe/data/schema.sql` + `lethe/data/seeds.sql`.
 
-## Quick start
+## Quick start — CLI
 
 Process a single WAV using a species-driven band:
 
@@ -57,17 +75,62 @@ lethe --freq-range 4000,20000 \
       --output-dir out/
 ```
 
-Same thing without installing:
-
-```bash
-python -m lethe --species bottlenose_dolphin --profile whistle \
-                --input-file recording.wav \
-                --output-dir out/
-```
-
 Output filenames are `<input_stem>_<YYYYMMDD_HHMMSS>.wav`, so
 successive runs never collide (and platform audio caches like Apple
 Music can't fool you into re-hearing the original).
+
+## Quick start — Claude Desktop
+
+Install with the MCP extra (`pip install -e ".[mcp]"`), then add to
+`~/Library/Application Support/Claude/claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "lethe": {
+      "command": "/absolute/path/to/lethe-mcp"
+    }
+  }
+}
+```
+
+Find your absolute path with `which lethe-mcp`. Restart Claude
+Desktop. Four tools appear:
+
+| MCP tool | Purpose |
+|---|---|
+| `lethe_list_species` | Discover available species |
+| `lethe_list_profiles` | List signal profiles for a species |
+| `lethe_list_noise_sources` | List the noise-source catalog |
+| `lethe_denoise` | Run denoising on a WAV file |
+
+Each tool returns the same structured JSON envelope documented below.
+The CLI's `--agentic` contract *is* the MCP contract — no duplicated
+surface.
+
+### Example conversation
+
+> **User:** Denoise `/data/gold_standard.wav` using lethe. Target
+> bottlenose dolphin whistles. Save output in `/tmp` and give me a
+> report on the findings.
+
+> **Claude (paraphrased, using the returned JSON):**
+> Clean run. Output saved to `/tmp/gold_standard_<stamp>.wav`.
+> Input: 60 s, 48 kHz stereo PCM-16.
+>
+> | Band | Pre (dB) | Post (dB) | Δ |
+> |---|---|---|---|
+> | Sub (< 4 kHz) | −36.1 | −58.5 | −22.4 |
+> | Signal (4–20 kHz) | −36.8 | −36.9 | −0.2 |
+> | Super (> 20 kHz) | −43.3 | −62.7 | −19.4 |
+>
+> Signal band is effectively untouched while both out-of-band
+> regions are hammered by ~20 dB each. The sub-band knockdown
+> is the operationally valuable one — ship engine and flow noise
+> live there.  0.62 s wall-clock for 60 s stereo (~96× realtime).
+
+Claude reasons about SNR from `band_energy` values without any
+extra plumbing.
 
 ## CLI reference
 
@@ -115,7 +178,7 @@ Stable exit codes:
 | `4` | I/O error (missing input) |
 | `5` | Processing error (one or more files failed) |
 
-Processing payload:
+### Processing payload
 
 ```json
 {
@@ -163,6 +226,24 @@ The `band_energy` metrics are the agentic differentiator: sub-band
 super-band (above `freq_hi`) RMS — enough for a supervising agent to
 reason about SNR, not just overall level.
 
+### Error payload
+
+When something fails under `--agentic`, structured errors replace
+human-facing messages:
+
+```json
+{
+  "lethe_version": "0.1.0",
+  "exit_code": 3,
+  "errors": [
+    {
+      "stage": "resolve_cfg",
+      "message": "unknown species: 'narwhal'"
+    }
+  ]
+}
+```
+
 ## Configuration database
 
 Config lives in a small SQLite database at `lethe/data/lethe.db`
@@ -175,8 +256,27 @@ Config lives in a small SQLite database at `lethe/data/lethe.db`
   (ship_engine, propeller_cavitation, snapping_shrimp,
   seismic_airgun, flow_noise)
 
-Extend by editing `lethe/data/seeds.sql` and running `--init-db`, or
-by issuing SQL directly against the DB.
+### Extending the database
+
+Add a new species and profile directly via SQL:
+
+```sql
+INSERT INTO species (scientific_name, common_name, notes)
+VALUES ('Orcinus orca', 'killer whale', 'Delphinidae');
+
+INSERT INTO signal_profile
+  (species_id, name, freq_lo, freq_hi, notes)
+SELECT id, 'whistle', 500, 25000, 'Orca whistles and pulsed calls'
+FROM species WHERE scientific_name = 'Orcinus orca';
+```
+
+Or append to `lethe/data/seeds.sql` and regenerate:
+
+```bash
+lethe --init-db
+```
+
+The same pattern applies to `noise_source`.
 
 ## Audio data
 
@@ -188,7 +288,7 @@ of any common format (`*.wav`, `*.flac`, `*.mp3`, `*.aif`, `*.m4a`,
 
 ```
 lethe/
-├── pyproject.toml           # Install metadata + `lethe` console entry
+├── pyproject.toml           # Install metadata + console entries
 ├── README.md
 ├── LICENSE
 └── lethe/                   # Package
@@ -210,58 +310,42 @@ lethe/
 New denoising stages are added as callables in `pipeline.py`; the
 `--noise-source` flag is already wired for stages that consult it.
 
+## Troubleshooting
+
+**`lethe: command not found` after install**
+Editable installs can miss the `bin/` directory on PATH. Try
+`python -m lethe ...` instead, or `pip install -e .` again inside
+an activated virtualenv.
+
+**Claude Desktop doesn't see the `lethe` tools**
+1. Confirm the absolute path in `claude_desktop_config.json` matches
+   `which lethe-mcp`.
+2. Fully quit and restart Claude Desktop (⌘Q, then relaunch).
+3. Check the Claude Desktop log for MCP errors.
+
+**"species has multiple profiles; use --profile to pick one of..."**
+The DB has more than one profile for that species (e.g. bottlenose
+dolphin has `whistle`, `burst_pulse`, `echolocation_click`). Pick
+one explicitly with `--profile`.
+
+**"high (N) must be < Nyquist (M)"**
+Your `--freq-range` upper bound exceeds half the sample rate. Lower
+the high frequency or resample to a higher SR.
+
 ## Standards
 
-- Python 3
-- PEP-8 compliant
+- Python 3.10+, PEP-8
 - ≤ 79 char lines, ≤ 35 line functions (excluding docstrings)
-- Stdlib + `numpy`, `scipy`, `soundfile`, `tqdm`, `colorama`
-
-## Claude Desktop (MCP server)
-
-Lethe ships an optional MCP (Model Context Protocol) server that
-exposes its capabilities as tools in Claude Desktop (and any other
-MCP-compatible client). Each tool shells out to the `lethe` CLI in
-`--agentic` mode — the CLI's JSON contract *is* the MCP contract, so
-there is no duplicated surface.
-
-Install with the MCP extra:
-
-```bash
-pip install -e ".[mcp]"
-```
-
-This registers a `lethe-mcp` console script. Then add it to your
-Claude Desktop config at
-`~/Library/Application Support/Claude/claude_desktop_config.json`:
-
-```json
-{
-  "mcpServers": {
-    "lethe": {
-      "command": "/absolute/path/to/lethe-mcp"
-    }
-  }
-}
-```
-
-Find your path with `which lethe-mcp`. Restart Claude Desktop. Lethe
-will appear in the tool picker with four tools:
-
-| MCP tool | Purpose |
-|---|---|
-| `lethe_list_species` | Discover available species |
-| `lethe_list_profiles` | List signal profiles for a species |
-| `lethe_list_noise_sources` | List the noise-source catalog |
-| `lethe_denoise` | Run denoising on a WAV file |
-
-Each returns the same structured JSON envelope documented above.
+- Stdlib + `numpy`, `scipy`, `soundfile`, `tqdm`, `colorama`,
+  optionally `mcp`
 
 ## Status
 
 **v0.1.0** — CLI, config DB, batch processing, agentic JSON surface,
 MCP server for Claude Desktop, single DSP stage (Butterworth
-bandpass). More stages coming.
+bandpass). Next: targeted stages driven by `--noise-source` (tonal
+notching, impulsive gating) and a supervising-agent self-tuning
+loop.
 
 ## License
 
