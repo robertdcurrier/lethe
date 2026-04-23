@@ -1,0 +1,49 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# macOS
+.DS_Store
+._*
+
+# IDE / editors
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# lethe runtime artifacts
+out/
+lethe/data/lethe.db
+*.log
+
+# audio data -- user brings their own
+*.wav
+*.WAV
+*.flac
+*.FLAC
+*.mp3
+*.MP3
+*.aif
+*.aiff
+*.AIF
+*.AIFF
+*.m4a
+*.M4A
+*.ogg
+*.OGG
+*.opus
