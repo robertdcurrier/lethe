@@ -61,7 +61,8 @@ def _run_lethe(args):
 
 
 def _denoise_args(input_file, output_dir, species,
-                  profile, freq_range, noise_sources):
+                  profile, freq_range, noise_sources,
+                  chunk_length, emit_chunks):
     """Build argv list for the `lethe` CLI."""
     args = [
         "--input-file", input_file,
@@ -78,6 +79,10 @@ def _denoise_args(input_file, output_dir, species,
         args.extend([
             "--noise-source", ",".join(noise_sources),
         ])
+    if chunk_length is not None:
+        args.extend(["--chunk-length", f"{float(chunk_length)}"])
+    if emit_chunks:
+        args.append("--emit-chunks")
     return args
 
 
@@ -126,33 +131,66 @@ async def lethe_denoise(
     profile: Optional[str] = None,
     freq_range: Optional[list] = None,
     noise_sources: Optional[list] = None,
+    chunk_length: float = 60.0,
+    emit_chunks: bool = False,
 ) -> dict:
     """Denoise one WAV file with lethe.
 
-    Provide EITHER --species (with optional --profile) OR
-    --freq-range. --freq-range overrides if both are given.
+    Provide EITHER species (with optional profile) OR
+    freq_range. freq_range overrides if both are given.
+
+    Chunking
+    --------
+    Long recordings are processed in chunks of
+    ``chunk_length`` seconds (default 60). Chunking is
+    always on so the returned envelope carries a
+    ``chunks[]`` array — set ``chunk_length <= 0`` to
+    coerce a single chunk spanning the whole file.
+
+    Output shape depends on ``emit_chunks``:
+
+    * ``emit_chunks=False`` (default): one streamed
+      WAV at ``<stem>_<stamp>.wav`` in ``output_dir``.
+      The file record has a top-level ``out_path``;
+      chunks carry metrics only.
+    * ``emit_chunks=True``: N separate WAVs named
+      ``<stem>_<stamp>_chunk_<NNN>.wav``. The file
+      record has no top-level ``out_path``; each chunk
+      dict carries its own ``out_path``. Use this when
+      feeding chunks to a downstream classifier (e.g.,
+      guardian) or for testing/iteration.
+
+    Use ``emit_chunks`` when the user says "chunk this"
+    or asks for per-chunk files; default otherwise.
 
     Args:
         input_file: absolute path to the input WAV.
-        output_dir: directory for the denoised output.
+        output_dir: directory for denoised output.
         species: species name from the config DB
             (e.g. 'bottlenose_dolphin').
         profile: signal profile under species
             (e.g. 'whistle'). Required when the species
             has multiple profiles.
         freq_range: [low_hz, high_hz] bandpass range.
-            Overrides the species/profile default.
+            Overrides species/profile defaults.
         noise_sources: list of noise-source names from
             the catalog (e.g. ['ship_engine',
             'snapping_shrimp']). Informational in v0.1.
+        chunk_length: chunk size in seconds
+            (default 60.0). <= 0 disables chunking.
+        emit_chunks: write one WAV per chunk instead of
+            a single concatenated output.
 
-    Returns the full agentic JSON envelope including
-    per-file metrics (pre/post RMS, sub / signal / super
-    band energies, elapsed) and structured errors.
+    Returns:
+        The full agentic JSON envelope. Per-file record
+        includes ``chunks[]`` with idx, start_s, end_s,
+        pre/post RMS, pre/post sub/signal/super band
+        energies, and (when emit_chunks) ``out_path``.
     """
     args = _denoise_args(
         input_file, output_dir, species, profile,
         freq_range, noise_sources,
+        chunk_length, emit_chunks,
     )
     return _run_lethe(args)
 

@@ -7,9 +7,7 @@ from tqdm import tqdm
 
 from lethe import __version__, agent, db, ui
 from lethe.io import list_wavs
-from lethe.pipeline import (
-    output_path_for, process_file, run_stamp,
-)
+from lethe.pipeline import process_file, run_stamp
 
 
 def parse_freq_range(text):
@@ -64,6 +62,13 @@ def build_parser():
                    type=parse_noise_sources, default=[],
                    metavar="A,B,C",
                    help="noise sources to target (informational)")
+    p.add_argument("--chunk-length", type=float, default=60.0,
+                   metavar="SECONDS",
+                   help="chunk length in seconds (default 60; "
+                        "<=0 disables chunking)")
+    p.add_argument("--emit-chunks", action="store_true",
+                   help="write one WAV per chunk instead of "
+                        "a single concatenated output")
     p.add_argument("--agentic", action="store_true",
                    help="emit JSON on stdout; silence UI")
     p.add_argument("-v", "--verbose", action="store_true",
@@ -207,6 +212,8 @@ def resolve_cfg(args, conn):
         "profile": profile,
         "freq_range": freq_range,
         "noise_sources": noise,
+        "chunk_length_s": args.chunk_length,
+        "emit_chunks": args.emit_chunks,
     }
 
 
@@ -238,6 +245,7 @@ def print_metrics(m):
     ui.kv("channels", m["channels"])
     ui.kv("duration", f"{m['duration_s']:.2f} s")
     ui.kv("subtype", m["subtype"])
+    ui.kv("chunks", m.get("chunk_count", 1))
     ui.kv("pre rms", f"{m['pre_rms_dbfs']:.2f} dBFS")
     ui.kv("post rms", f"{m['post_rms_dbfs']:.2f} dBFS")
     ui.kv("delta", f"{m['delta_db']:+.2f} dB")
@@ -279,6 +287,10 @@ def print_header(cfg, stamp, inputs, output_dir):
             n["name"] for n in cfg["noise_sources"]
         )
         ui.info(f"noise      = {names}")
+    cl = cfg.get("chunk_length_s") or 0
+    if cl > 0:
+        mode = "emit" if cfg.get("emit_chunks") else "single"
+        ui.info(f"chunk len  = {cl:g} s ({mode} output)")
     ui.info(f"run stamp  = {stamp}")
     ui.info(f"{len(inputs)} file(s) -> {output_dir}")
 
@@ -315,11 +327,10 @@ def process_all(inputs, cfg, stamp, args):
             disable=len(inputs) == 1,
         )
     for in_path in iter_files:
-        out_path = output_path_for(
-            in_path, args.output_dir, stamp,
-        )
         try:
-            m = process_file(in_path, out_path, cfg)
+            m = process_file(
+                in_path, cfg, args.output_dir, stamp,
+            )
         except Exception as exc:
             errors.append(agent.error_record(
                 "process_file", exc, in_path,

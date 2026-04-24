@@ -79,6 +79,33 @@ Output filenames are `<input_stem>_<YYYYMMDD_HHMMSS>.wav`, so
 successive runs never collide (and platform audio caches like Apple
 Music can't fool you into re-hearing the original).
 
+### Chunking
+
+Default output is a single concatenated WAV — the same file you'd
+get without chunking at all, bit-for-bit. Chunking is primarily a
+**diagnostic tool**: use `--emit-chunks` to write short segments
+you can drop into Audacity, Raven, or any reviewer that chokes on
+30-minute files:
+
+```bash
+lethe --species bottlenose_dolphin --profile whistle \
+      --chunk-length 10 --emit-chunks \
+      --input-file gold_standard.wav \
+      --output-dir out/
+# => out/gold_standard_<stamp>_chunk_000.wav ... _chunk_005.wav
+```
+
+Under the hood, every run is processed in 60 s windows (override
+with `--chunk-length SECONDS`) so the agentic envelope always
+carries a `chunks[]` array with per-chunk pre/post RMS and
+sub/signal/super band energies. A supervising agent can localize
+signal — "which 10-second window has the best
+`signal_band_db - sub_band_db`?" — without additional tooling. This
+streaming also keeps memory bounded on long hydrophone deployments.
+
+Pass `--chunk-length 0` to disable chunking entirely (single chunk
+spanning the whole file; behaves exactly like v0.1.0).
+
 ## Quick start — Claude Desktop
 
 Install with the MCP extra (`pip install -e ".[mcp]"`), then add to
@@ -145,6 +172,8 @@ extra plumbing.
 | `--species NAME` | Pull freq_range from the DB |
 | `--profile NAME` | Named signal profile under `--species` |
 | `--noise-source A,B,C` | Noise sources to target (wired for future stages) |
+| `--chunk-length SECONDS` | Chunk size in seconds (default 60; `<=0` disables) |
+| `--emit-chunks` | Write one WAV per chunk instead of a single concatenated output |
 | `-v, --verbose` | Per-file metrics |
 | `--agentic` | Emit structured JSON on stdout; silence UI |
 
@@ -189,7 +218,9 @@ Stable exit codes:
     "species": {...},
     "profile": {...},
     "freq_range": [4000, 20000],
-    "noise_sources": [...]
+    "noise_sources": [...],
+    "chunk_length_s": 60.0,
+    "emit_chunks": false
   },
   "input_count": 1,
   "output_dir": "/abs/path/out",
@@ -214,6 +245,20 @@ Stable exit codes:
         "signal_band_db": -36.9,
         "super_band_db": -62.7
       },
+      "chunk_length_s": 60.0,
+      "chunk_count": 6,
+      "chunks": [
+        {
+          "idx": 0,
+          "start_s": 0.0,
+          "end_s": 10.0,
+          "frames": 480000,
+          "pre_rms_dbfs": -33.6,
+          "post_rms_dbfs": -38.2,
+          "pre_band_db": {...},
+          "post_band_db": {...}
+        }
+      ],
       "elapsed_s": 0.61
     }
   ],
@@ -225,6 +270,21 @@ The `band_energy` metrics are the agentic differentiator: sub-band
 (below `freq_lo`), signal-band (inside `freq_lo..freq_hi`), and
 super-band (above `freq_hi`) RMS — enough for a supervising agent to
 reason about SNR, not just overall level.
+
+### Chunks
+
+`chunks[]` is always present. File-level `pre_rms_dbfs`,
+`post_rms_dbfs`, and band metrics are power-weighted aggregates of
+the per-chunk values, so an agent can either summarize at the file
+level or localize — "which 10-second window has the best
+`signal_band_db - sub_band_db`?" — without additional tooling.
+
+When `emit_chunks` is `true`:
+
+- The file record has **no** top-level `out_path`.
+- Each chunk dict carries its own `out_path` at
+  `<stem>_<stamp>_chunk_<NNN>.wav`, matching the guardian handoff
+  naming convention.
 
 ### Error payload
 
