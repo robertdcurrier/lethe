@@ -69,6 +69,28 @@ def wav_info(path):
     }
 
 
+def scan_inputs(paths):
+    """Sum bytes + duration across a list of WAVs.
+
+    Header-only (soundfile.info) so it's cheap even for
+    thousands of files. Paths that fail to probe are
+    silently skipped.
+    """
+    total_bytes = 0
+    total_s = 0.0
+    for p in paths:
+        try:
+            total_bytes += os.path.getsize(p)
+        except OSError:
+            continue
+        try:
+            info = sf.info(p)
+            total_s += info.frames / float(info.samplerate)
+        except Exception:
+            continue
+    return total_bytes, total_s
+
+
 def iter_chunks(path, chunk_samples, pad_samples):
     """Yield chunks with neighbor-sample padding.
 

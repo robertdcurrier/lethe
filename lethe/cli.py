@@ -1,13 +1,18 @@
 """Command-line interface for lethe."""
 import argparse
+import concurrent.futures
 import os
 import sys
+import threading
 
 from tqdm import tqdm
 
 from lethe import __version__, agent, db, ui
-from lethe.io import list_wavs
+from lethe.io import list_wavs, scan_inputs
 from lethe.pipeline import process_file, run_stamp
+
+
+DEFAULT_WORKERS = min(os.cpu_count() or 4, 8)
 
 
 def parse_freq_range(text):
@@ -69,6 +74,11 @@ def build_parser():
     p.add_argument("--emit-chunks", action="store_true",
                    help="write one WAV per chunk instead of "
                         "a single concatenated output")
+    p.add_argument("--workers", type=int,
+                   default=DEFAULT_WORKERS, metavar="N",
+                   help=f"parallel worker threads "
+                        f"(default {DEFAULT_WORKERS}; 1 = "
+                        f"sequential)")
     p.add_argument("--agentic", action="store_true",
                    help="emit JSON on stdout; silence UI")
     p.add_argument("-v", "--verbose", action="store_true",
@@ -269,30 +279,14 @@ def print_metrics(m):
     ui.kv("elapsed", f"{m['elapsed_s']:.2f} s")
 
 
-def print_header(cfg, stamp, inputs, output_dir):
-    """Render human-facing run header."""
-    ui.title(f"lethe v{__version__}")
-    if cfg["species"]:
-        ui.info(
-            "species    = "
-            f"{cfg['species']['common_name']}  "
-            f"({cfg['species']['scientific_name']})"
-        )
-        if cfg["profile"]:
-            ui.info(f"profile    = {cfg['profile']['name']}")
-    lo, hi = cfg["freq_range"]
-    ui.info(f"freq range = {lo}-{hi} Hz")
-    if cfg["noise_sources"]:
-        names = ", ".join(
-            n["name"] for n in cfg["noise_sources"]
-        )
-        ui.info(f"noise      = {names}")
-    cl = cfg.get("chunk_length_s") or 0
-    if cl > 0:
-        mode = "emit" if cfg.get("emit_chunks") else "single"
-        ui.info(f"chunk len  = {cl:g} s ({mode} output)")
-    ui.info(f"run stamp  = {stamp}")
-    ui.info(f"{len(inputs)} file(s) -> {output_dir}")
+def print_summary(cfg, stamp, inputs, output_dir, workers):
+    """Boxed startup summary (banner, system, run)."""
+    total_bytes, total_s = scan_inputs(inputs)
+    ui.print_banner()
+    ui.print_system_box(ui.system_info(), workers)
+    ui.print_run_box(
+        cfg, stamp, inputs, output_dir, total_bytes, total_s,
+    )
 
 
 def run_processing(args, conn):
@@ -301,9 +295,14 @@ def run_processing(args, conn):
     inputs = resolve_inputs(args)
     os.makedirs(args.output_dir, exist_ok=True)
     stamp = run_stamp()
+    workers = _effective_workers(args, inputs)
     if not args.agentic:
-        print_header(cfg, stamp, inputs, args.output_dir)
-    metrics, errors = process_all(inputs, cfg, stamp, args)
+        print_summary(
+            cfg, stamp, inputs, args.output_dir, workers,
+        )
+    metrics, errors = process_all(
+        inputs, cfg, stamp, args, workers,
+    )
     exit_code = (
         agent.EXIT_OK if not errors else agent.EXIT_PROCESSING
     )
@@ -317,8 +316,58 @@ def run_processing(args, conn):
     return exit_code
 
 
-def process_all(inputs, cfg, stamp, args):
-    """Iterate inputs, collect metrics + structured errors."""
+def _effective_workers(args, inputs):
+    """Clamp --workers to a sane value for this run."""
+    w = max(1, int(args.workers or 1))
+    return min(w, max(1, len(inputs)))
+
+
+class _ActiveCounter:
+    """Thread-safe in-flight counter; updates tqdm postfix."""
+
+    def __init__(self, pbar):
+        self._lock = threading.Lock()
+        self._count = 0
+        self._pbar = pbar
+
+    def enter(self):
+        """Increment count; refresh postfix."""
+        with self._lock:
+            self._count += 1
+            n = self._count
+        self._refresh(n)
+
+    def exit(self):
+        """Decrement count; refresh postfix."""
+        with self._lock:
+            self._count -= 1
+            n = self._count
+        self._refresh(n)
+
+    def _refresh(self, n):
+        if self._pbar is not None:
+            self._pbar.set_postfix(active=n)
+
+
+def _run_one(in_path, cfg, output_dir, stamp, counter=None):
+    """Worker wrapper; returns (in_path, metrics, exc)."""
+    if counter is not None:
+        counter.enter()
+    try:
+        try:
+            m = process_file(
+                in_path, cfg, output_dir, stamp,
+            )
+            return in_path, m, None
+        except Exception as exc:
+            return in_path, None, exc
+    finally:
+        if counter is not None:
+            counter.exit()
+
+
+def _process_sequential(inputs, cfg, stamp, args):
+    """Sequential fallback for workers=1 or single-file runs."""
     metrics, errors = [], []
     iter_files = inputs
     if not args.agentic:
@@ -327,11 +376,10 @@ def process_all(inputs, cfg, stamp, args):
             disable=len(inputs) == 1,
         )
     for in_path in iter_files:
-        try:
-            m = process_file(
-                in_path, cfg, args.output_dir, stamp,
-            )
-        except Exception as exc:
+        _, m, exc = _run_one(
+            in_path, cfg, args.output_dir, stamp,
+        )
+        if exc is not None:
             errors.append(agent.error_record(
                 "process_file", exc, in_path,
             ))
@@ -340,6 +388,51 @@ def process_all(inputs, cfg, stamp, args):
         if args.verbose and not args.agentic:
             print_metrics(m)
     return metrics, errors
+
+
+def _process_parallel(inputs, cfg, stamp, args, workers):
+    """Threaded per-file processing; preserves input order."""
+    results = [None] * len(inputs)
+    errors = []
+    pbar = None
+    if not args.agentic:
+        pbar = tqdm(total=len(inputs), unit="file")
+    counter = _ActiveCounter(pbar)
+    with concurrent.futures.ThreadPoolExecutor(
+        max_workers=workers,
+    ) as ex:
+        fut_to_idx = {
+            ex.submit(
+                _run_one, p, cfg, args.output_dir,
+                stamp, counter,
+            ): i
+            for i, p in enumerate(inputs)
+        }
+        for fut in concurrent.futures.as_completed(fut_to_idx):
+            idx = fut_to_idx[fut]
+            _, m, exc = fut.result()
+            if exc is not None:
+                errors.append(agent.error_record(
+                    "process_file", exc, inputs[idx],
+                ))
+            else:
+                results[idx] = m
+                if args.verbose and not args.agentic:
+                    print_metrics(m)
+            if pbar is not None:
+                pbar.update(1)
+    if pbar is not None:
+        pbar.close()
+    return [m for m in results if m is not None], errors
+
+
+def process_all(inputs, cfg, stamp, args, workers):
+    """Dispatch sequential vs threaded per-file processing."""
+    if workers <= 1 or len(inputs) <= 1:
+        return _process_sequential(inputs, cfg, stamp, args)
+    return _process_parallel(
+        inputs, cfg, stamp, args, workers,
+    )
 
 
 def dispatch(args):

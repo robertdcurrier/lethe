@@ -37,6 +37,7 @@ dependencies = [
     "soundfile",
     "tqdm",
     "colorama",
+    "psutil",
 ]
 
 [project.optional-dependencies]

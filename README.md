@@ -106,6 +106,42 @@ streaming also keeps memory bounded on long hydrophone deployments.
 Pass `--chunk-length 0` to disable chunking entirely (single chunk
 spanning the whole file; behaves exactly like v0.1.0).
 
+## Parallel batch processing
+
+When `--input-dir` points at multiple files, lethe fans them out
+across a `ThreadPoolExecutor` (default `min(cpu, 8)` workers).
+scipy's `sosfiltfilt` and `soundfile` I/O both release the GIL
+during their C-level work, so threads get real parallelism without
+pickling overhead. Typical speedup on a 12-core machine: ~2.5× for
+5 files, ~4× for 20+.
+
+```bash
+lethe --species bottlenose_dolphin --profile whistle \
+      --workers 4 \
+      --input-dir /data/deployment_2003_06/ \
+      --output-dir out/
+```
+
+`--workers 1` forces the sequential path (slightly faster for
+single-file runs and useful when debugging). The `files[]` array in
+the agentic envelope is always returned in input order regardless
+of worker count.
+
+The progress bar grows an `active=N` postfix during parallel runs
+showing files currently in flight — you'll see it climb as the pool
+fills and count back down as workers finish:
+
+```
+40%|████      | 2/5 [00:08<00:11,  3.88s/file, active=3]
+```
+
+## Startup summary
+
+Runs open with a three-box summary (banner / SYSTEM / RUN) showing
+CPU model, memory, worker count, species + profile, file counts,
+total audio duration, and output path — mirrors the style used in
+the OCEANCODA GUARDIAN toolkit. Suppressed under `--agentic`.
+
 ## Quick start — Claude Desktop
 
 Install with the MCP extra (`pip install -e ".[mcp]"`), then add to
@@ -174,6 +210,7 @@ extra plumbing.
 | `--noise-source A,B,C` | Noise sources to target (wired for future stages) |
 | `--chunk-length SECONDS` | Chunk size in seconds (default 60; `<=0` disables) |
 | `--emit-chunks` | Write one WAV per chunk instead of a single concatenated output |
+| `--workers N` | Parallel worker threads (default `min(cpu, 8)`; `1` = sequential) |
 | `-v, --verbose` | Per-file metrics |
 | `--agentic` | Emit structured JSON on stdout; silence UI |
 
